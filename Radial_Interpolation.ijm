@@ -1,176 +1,189 @@
-//Get the file that you want to process (must be a single slice, single frame, multicolor image).
-input = getDirectory("Choose Source Directory: ");
-list = getFileList(input);
+// Get the file that you want to process (must be a single slice, single frame, multi-channel image).
+#@ File (label="Choose directory with images to process (multi-channel is ok, but must be 1z and 1t)", style = "directory") dir_input
+#@ File (label="Choose directory for creating result folders (one level above input data dir?)", style = "directory") dir_main
+#@ Integer (label="Number of concentric rings", value = 256) N_rings
+#@ Boolean (label="Check box if you want radial color coding", value=true) want_color_coding
+#@ String (label="LUT for color coding", choices={"Fire", "Spectrum", "Ice"}, style="listBox") lut_for_color_coding
 
-//specify output folder to save rois, "target" colorcoded images to show spacing of circles, and intensity meaasurements whic have the excel files
-output = input + "rois/";
-output2 = input + "target_hyperstacks/";
-output3 = input + "IntensityMeasurements/";
-File.makeDirectory(output);
-File.makeDirectory(output2);
-File.makeDirectory(output3);
+// Fiji settings
+setOption("BlackBackground", true);
+run("Set Measurements...", "area mean standard min integrated area_fraction stack display nan redirect=None decimal=3");
+
+n_slices = N_rings - 1;
 
 
-// I recommend just using one tif in a folder at a time until you get comfortable with the code (it takes a few minutes to run each cell and you want to make sure it's doing what you think it is). That said, this should allow it to process as many tiffs as are in a folder.  IF processing lots of tifs, you might want to consider turning off the bit that makes the hyperstacks and doing more steps in set bath mode hide
+// Create directories to save: 
+// - ROIs
+// - colorcoded images to show ROIs
+// - intensity meaasurements in CSV files
+// - cropped images to show spacing of circles
+
+dir_rois         = dir_main + File.separator + "ROIs"                  + File.separator;
+dir_color_coded  = dir_main + File.separator + "ColorCoded"            + File.separator;
+dir_measurements = dir_main + File.separator + "IntensityMeasurements" + File.separator;
+dir_cropped      = dir_main + File.separator + "Cropped"               + File.separator;
+
+
+File.makeDirectory(dir_rois);
+File.makeDirectory(dir_color_coded);
+File.makeDirectory(dir_measurements);
+File.makeDirectory(dir_cropped);
+
+
+// I recommend just using one tif in a folder at a time until you get comfortable with the code.
+// It takes a few minutes to run each cell, and you want to make sure it's doing what you think it is.
+// That said, this should allow it to process as many tiffs as are in a folder.
+// If processing lots of tifs, you might want to consider turning off the bit that makes the hyperstacks and doing more steps in set batch mode hide
+
+list = getFileList(dir_input);
+
 for (i = 0; i< list.length; i++) {
-
-		filename=list[i];
-		NucToPM(input, filename);
+	filename = list[i];
+	
+	if (endsWith(filename, ".tif")) {
+		NucToPM(dir_input, filename);
 	}
-		
-function NucToPM(dir,file){
-	
-	
-	if (endsWith(file, ".tif")) {
-
-		//  Pick the file and get the name
-			L=lengthOf(file);
-			filebase=substring(file,0,L-4);
-
-		//  Open the file and make a working copy
-			run("Bio-Formats", "open=" + input + filename + " autoscale color_mode=Default view=Hyperstack stack_order=XYCZT");
-			imageID=getTitle();
-			run("Split Channels"); // break up the individual channels
-			selectWindow("C1-"+imageID+""); // select which ever channel is C1
-		
-		// --------------------------------------------------------------------------------------------------------------------
-		//HERE WE SET PROCESS THE FIRST COLOR WHICH WILL HEREAFTER BE KNOWN AS C1. 256 STEPS WILL BE USED FOR THE UNWRAPPING
-		n = 255; //number of slices
-		//create stack of 256 slices form single image for C1.  We need to duplicate 255 times.  This number can be set to whatever you want and will govern the number of concentric rings.
-		setBatchMode("hide");
-		for (i = 0; i < n; i++) {
-			run("Duplicate...", "title=C1");
+}
+function buildConcatenateStringFromC(N_channels, prefix) {
+	// Create the command string for Concatenate for multiple channels
+	cmd_concat = "open";
+	for (i = 1; i <= N_channels; i++) {
+		str_concat = "image" + i + "=" + prefix + i;
+		cmd_concat = cmd_concat + " " + str_concat;
 		}
-		//convert to stack with 256 slices for C1
-		run("Images to Stack", "name=C1 title=C1 use");
-		setBatchMode("exit and display");
-		//-----------------------------------------------------------------------------------------------------------------
+	
+	return cmd_concat;
+}
+
+function NucToPM(dir_input, filename){
+	//  Open the file, save info for later, and make a working copy
+	run("Bio-Formats", "open=" + dir_input + File.separator + filename + " autoscale color_mode=Default view=Hyperstack stack_order=XYCZT");
+
+	filebase = File.nameWithoutExtension;
+	image_orig_name = getTitle();
+	getDimensions(_, _, N_channels, _, _);
+	
+	// TODO: Make the macro work on single channel images?
+	run("Split Channels");
+	
+	// --------------------------------------------------------------------------------------------------------------------
+
+	setBatchMode("hide");
+	for(channel = 1; channel <= N_channels; channel++){
+		C_str = "C" + channel;
+		selectWindow(C_str + "-" + image_orig_name);
 		
-		
-		
-		
-		// --------------------------------------------------------------------------------------------------------------------
-		// HERE WE SET PROCESS THE SECOND COLOR WHICH WILL HEREAFTER BE KNOWN AS C1. 256 STEPS WILL BE USED FOR THE UNWRAPPING.  You can basically copy and npaste this but make it C3. I will eventually put all of this in a loop so the number of channels can be just set at the beginning.
-		//Create stack of 256 slices for C2 (still using n =255 from above).
-		selectWindow("C2-"+imageID+"");
-		setBatchMode("hide");
-		for (i = 0; i < n; i++) {
-			run("Duplicate...", "title=C2");
+		for (i=0; i < n_slices; i++){
+			run("Duplicate...", "title=&C_str");
+			rename(C_str);
 		}
-		//Convert to stack with 256 slices for C2
-		run("Images to Stack", "name=C2 title=C2 use");
-		setBatchMode("exit and display");
-		//-----------------------------------------------------------------------------------------------------------------
+		run("Images to Stack", "name=&C_str title=&C_str use");
+		rename(C_str);
+	}
+	
+	setBatchMode("exit and display");
+// -----------------------------------------------------------------------------------------
+
+	// THE SINGLE MOST IMPORTANT THING IS THAT THERE CAN'T BE ANYTHING IN THE ROI MANAGER WHEN YOU START THIS CODE OR IT WILL BE ERRONEOUSLY INCORPORATED INTO THE INTERPOLATION.
+	roiManager("reset");
+
+	// Now we manually select the nucleus and the plasma membrane. Be sure to only hit ok after you have fully traced the structure.  Also make sure not to change the frame once you start.
+	// This should be done on the ER channel or whatever channel easily lets you see the nucleus and PM. 
+	// The objective here is to create an ROI of the nucleus on slice 1 and an ROI of the plasma membrane on slice 256 then interpolate between them	
+	
+	waitForUser ( "SelectImage", "Select the image to trace the nucleus and plasma membrane");
+	Stack.setSlice(1);			
+	setTool("polygon"); // Do your best to trace the nucleus. Don't worry about sharp angles; this runs a fit spline command to make your annotation nice and SMOOOOOTH
+	waitForUser ( "Nucleus", "Trace the Nucleus");
+	run("Fit Spline");
+	roiManager("Add");
+	run("Select None");	
+	Stack.setSlice(N_rings);
+	waitForUser ( "ROI","Trace the cell you want to analyze");
+	run("Fit Spline");
+	roiManager("Add");	
+	roiManager("Interpolate ROIs");	
+	Stack.setSlice(1);	
+	run("Select None");	
 
 
-		//Now we manually select the nucleus and the plasma membrane. Be sure to only hit ok after you have fully traced the structure.  Also make sure not to change the frame once you start.
-		// THE SINGLE MOST IMPORTANT THING IS THAT THERE CAN'T BE ANYTHING IN THE ROI MANAGER WHEN YOU START THIS CODE OR IT WILL BE ERRONEOUSLY INCORPORATED INTO THE INTERPOLATION. I SHOULD PROBABLY WRITE SOMETHING TO MAKE SURE THIS NEVER HAPPENS BUT I HAVENT YET
-		//This should be done on the ER channel or whatever channel easily lets you see the nucleus and PM.  The objective here is to create an ROI of the nucleus on slice 1 and an ROI of the plasma membrane on slice 256 then interpolate between them
-		waitForUser ( "SelectImage","Select the image to trace the nucleus and plasma membrane");
-		Stack.setSlice(1);			
-		setTool("polygon"); // do your best to trace the nucleus. dont worry about sharp angles, this runs a fit spline command to make your annotation nice and SMOOOOOTH
-		waitForUser ( "Nucleus","Trace the Nucleus");
-		run("Fit Spline");
-		roiManager("Add");
-		run("Select None");	
-		Stack.setSlice(256);
-		waitForUser ( "ROI","Trace the cell you want to analyze");
-		run("Fit Spline");
-		roiManager("Add");	
-		roiManager("Interpolate ROIs");	
-		Stack.setSlice(1);	
-		run("Select None");	
+	//-----------------------------------------------------------------------------------------------------------------
+	// In order to calculate the area and intensity of each ring, slice the image into concentric polygons of increasing size. 
+	// As a somewhat hacky solution, clear outside of the selected slice, jump to the next slice (j+1), and clear a portion of the image the size of j.
+	// so for j = 0 (ROI 0), we clear everything outside the nucleus (which stays). I don't know if it's necessary or not--but better to keep it.
+	// Ignore the values later in the analysis if unwanted.
+	// When we then iterate to the next value of j, we clear inside and now that gives a ring of intensity values surrounded by 0 value background
+	// If N_rings = 255, then Roi #254 corresponds to the second to last slice 
+	// The images are 1-indexed but the ROIs are 0-indexed.
+	// This will give a stack with a nucleus in the first slice, 254 ring slices, and 1 final slice that has not been cropped..we'll handle that below.
 	
-	
-		//-----------------------------------------------------------------------------------------------------------------
-		//In order to calculate the area and intensity of each ring we will slice the image into concentric polygons of increasing size. 
-		//As a somewhat hacky solution we just clear outside of the selected slice, jump to the next slice (j+1) and clear a portion of the image the size of j.
-		// so for j = 0, that is Roi 0 and we end up clear everything around the nucleus (which stays). I don't know if it's necessary or not, but better to keep it.  I'll just ignore the values later in the matlab analysis if i dont want them.
-		// When we then iterate to the next value of j, we clear inside and now that gives a ring of intensity values surrounded by 0 value background
-		// Roi value 254 corresponds to the second to last slice (255...the images are 1 indexed but the rois are 0 indexed which is annoying AF and I keep forgetting). This will give a stack with a nucleus in the first slice, 254 ring slices, and 1 final slice that has not been cropped..we'll handle that below.
-	
-		selectWindow("C1");
+	for(channel = 1; channel <= N_channels; channel++){
+		C_str = "C" + channel;
+		selectWindow(C_str);
 		resetMinAndMax();
-		run("Add...", "value=1 stack"); // This will be important later to ensure that there are no 0 value pixels in the signal (which really should never happen but you never know... Airyscan and decon sometimes to weird things).  0 value will thus just be cropped background.  
-		roiManager("Select", 0);
-	for (j=0; j<255; j++) {
-		roiManager("Select",j);
-		run("Clear Outside", "slice");
-		run("Next Slice [>]");
-		run("Clear", "slice");
-		}
+		
+		run("Add...", "value=1 stack"); // This will be important later to ensure that there are no 0 value pixels in the signal. 0 value will thus just be cropped background.  
+		
+		for (j=0; j < n_slices; j++) {
+			roiManager("Select", j);
+			run("Clear Outside", "slice");
+			run("Next Slice [>]");
+			run("Clear", "slice");
+			}
 		
 		// This will clear the final area outside of the final slice to complete the picture
-		roiManager("Select", 255);
+		roiManager("Select", n_slices);
 		run("Clear Outside", "slice");
-
+	
 		run("32-bit"); // making it 32 bit so we can convert the 0 to nan background
-		setAutoThreshold("Percentile dark");  // OK so this is important.  i worked out that this thresholding always worked for my test images...but it may not be the best way to do it.  Lots of other options works.  Your background is always equal to 0 and foreground is >0.
-		run("NaN Background", "stack");
-		run("Statistics"); // so you make the background not a number then get stats to get min and max values for the whole stack to set the display for the eventual 8 bit conversion
-		MaxValueC1 = getResult("Max",0);
-		print(MaxValueC1);
-		MinValueC1 = getResult("Min",0);
-		print(MinValueC1);
-		setMinAndMax(MinValueC1, MaxValueC1);
-		Table.rename("Results", "C1ThresholdedStackRawIntDen"); //This has the max and min info...we don't really need it but I wanted to rename the table
+		setThreshold(1, 4294967295, "raw"); // Your background is always 0 and foreground is > 0.
+		run("NaN Background", "stack"); // Make the background not a number
+		run("Subtract...", "value=1 stack"); // Correct for the +1 earlier
+		im_for_stats = getTitle();
+		run("Statistics"); // Get stats (ignores NaNs) to get min and max values for the whole stack to set the display for the eventual 8 bit conversion
+		MaxValue = getResult("Max", 0);
+		print(MaxValue);
+		MinValue = getResult("Min",0);
+		print(MinValue);
+		setMinAndMax(MinValue, MaxValue);
+		Table.rename("Results", C_str + "ThresholdedStackRawIntDen"); // This has the max and min info...we don't really need it but I wanted to rename the table
 		
 		//-----------
-		selectWindow("C1");
-		run("Set Measurements...", "area mean standard modal min integrated display nan redirect=None decimal=3");
+		selectWindow(im_for_stats);
 		run("Measure Stack...");
-		Table.rename("Results", "C1_IntensityInformation");
-		saveAs("results", output3+filebase+"_C1Intensity.csv"); //This is the good stuff with intensity values.  You really only need to set area and integrated.
-	// Sets the display range of the active image to min and max
-		run("8-bit");
-		run("Temporal-Color Code", "lut=BarberPoleRamp start=1 end=256");
-	
-	//-------------------------------------------------------------------------------------------------------
-	//Just doing the same thing with the second channel
-		selectWindow("C2");
-		resetMinAndMax();
-		run("Add...", "value=1 stack"); //ensuring no zero values in the signal
-		roiManager("Select", 0);
+		Table.rename("Results", C_str + "_IntensityInformation");
+		saveAs("results", dir_measurements + filebase + "_"+ C_str + "_Intensity.csv"); // This is the good stuff with intensity values.  You really only need to set area and integrated.
 		
-	for (k=0; k<255; k++) {
-		roiManager("Select",k);
-		run("Clear Outside", "slice");
-		run("Next Slice [>]");
-		run("Clear", "slice");
+		if (want_color_coding) {
+			selectWindow(C_str);
+			
+			run("8-bit"); // Sets the display range of the active image to min and max
+			
+			run("Temporal-Color Code", "lut=" + lut_for_color_coding + " start=1 end=" + N_rings);
+			rename("Colored_" + C_str); // useful for later concatenation
+			
+			if (N_channels == 1){ // not possible in the current iteration of this code since it needs multi-channel data
+				saveAs("Tiff", dir_color_coded + File.separator + filebase + "_ColorCoded");
+			}
 		}
-		// This will clear the final area outside of the final slice to complete the picture
-		roiManager("Select", 255);
-		run("Clear Outside", "slice");
-		
-		run("32-bit");
-		setAutoThreshold("Percentile dark");
-		run("NaN Background", "stack");
-		run("Statistics");
-		MaxValueC2 = getResult("Max",0);
-		print(MaxValueC2);
-		MinValueC2 = getResult("Min",0);
-		print(MinValueC2);
-		setMinAndMax(MinValueC2, MaxValueC2);
-		Table.rename("Results", "C2ThresholdedStackRawIntDen");
-		
-		//-------------
-		selectWindow("C2");
-		run("Set Measurements...", "area mean standard modal min integrated display nan redirect=None decimal=1");
-		run("Measure Stack...");
-		Table.rename("Results", "C2_IntensityInformation");
-		saveAs("results", output3+filebase+"_C2Intensity.csv");
-		
-		//scale intensity for display
-		run("8-bit");
-		run("Temporal-Color Code", "lut=BarberPoleRamp start=1 end=256"); // You can replace "Target" with any LUT installed. I'm including some funny radial ones that I made like "SunsetSplines" and "BarberPoleProper".
+	}
+	
+	if (want_color_coding){
+		cmd_concat = buildConcatenateStringFromC(N_channels, "Colored_C");
+		run("Concatenate...", cmd_concat);
+		saveAs("Tiff", dir_color_coded + File.separator + filebase + "_ColorCoded");
+	}
 	
 
-		
-		run("Concatenate...", "open image1=MAX_colored image2=MAX_colored-1 image3=[-- None --]");
-		saveAs("Tiff", output2+filebase+"_TargetImage");
-		run("Concatenate...", "open image1=C1 image2=C2 image=[-- None --]");
-		saveAs("Tiff", output2+filebase+"_CroppedImage");
-		roiManager("Select", newArray(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255));
-		roiManager("Save", output+filebase+"All.zip")
+	cmd_concat = buildConcatenateStringFromC(N_channels, "C");
+	run("Concatenate...", cmd_concat);
+	run("Stack to Hyperstack...", "order=xyctz channels=" + N_channels + " slices=" + N_rings + " frames=1 display=Composite");
+	saveAs("Tiff", dir_cropped + File.separator + filebase + "_Cropped");
+	
+	roiManager("Save", dir_rois + File.separator + filebase + "_All.zip")
+	
+	// clean up
+	close("*");
 }
-}
+
+setBatchMode(false);
